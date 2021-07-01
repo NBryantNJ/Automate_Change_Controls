@@ -1,0 +1,42 @@
+- name: create dynamic hosts
+  hosts: localhost
+  gather_facts: no
+  vars:
+    ckt_name: "{{ ckt_name_text|default('******') }}"
+
+ ##Dynamically add standard hosts
+  tasks:
+  - name: Get standard hosts
+    add_host:
+      hostname: "{{ item }}"
+      groups: "{{ ckt_name }}"
+      ansible_connection: network_cli
+      ansible_user: "******"
+      ansible_password: "******"
+      ansible_network_os: ios
+      ansible_become: yes
+    loop: "{{ lookup('file', 'group_vars/circuits/'+ckt_name+'.yml')|from_yaml|json_query('circuitDefinition[0].endPoints[*].router') }}"
+    changed_when: false
+ 
+ 
+## Pre checks - Poison - Post checks    
+- name: Check and Poison circuit
+  hosts: "{{ ckt_name }}"
+  vars:
+    ckt_name: "******"
+  gather_facts: no
+  tasks: 
+    - include_role:
+        name: ios
+        tasks_from: ckt_pre_unpoison_checks.yml
+        
+    - include_role:
+        name: ios
+        tasks_from: ckt_unpoison
+        
+    - include_role: 
+        name: ios
+        tasks_from: ckt_post_unpoison_checks
+ 
+   
+    

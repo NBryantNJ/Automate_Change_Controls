@@ -1,0 +1,129 @@
+- name: create dynamic hosts
+  hosts: localhost
+  gather_facts: no
+  vars:
+    ckt_name: "{{ ckt_name_text|default('******') }}"
+
+ ##Dynamically add standard hosts
+  tasks:
+  - name: Get standard hosts
+    add_host:
+      hostname: "{{ item }}"
+      groups: "{{ ckt_name }}"
+      ansible_connection: network_cli
+      ansible_user: "******"
+      ansible_password: "******"
+      ansible_network_os: ios
+      ansible_become: yes
+    loop: "{{ lookup('file', 'group_vars/circuits/'+ckt_name+'.yml')|from_yaml|json_query('circuitDefinition[0].endPoints[*].router') }}"
+    changed_when: false
+
+ ##Dynamically add redundant hosts    
+  - name: Get redundant circuit file name
+    set_fact:
+      redundantCircuitFileName: "{{ redundantCircuitFileName | default([]) | union([item]) }}"
+    with_items: "{{ lookup('file', 'group_vars/circuits/'+ckt_name+'.yml')|from_yaml|json_query('circuitDefinition[0].redundantWanSites') }}"
+ 
+   ##Get first redundant wan doc if exists
+  - name: parse1
+    set_fact:
+      redundantCircuitFileName1: "{{ redundantCircuitFileName.0 }}"
+    when: redundantCircuitFileName.0 is defined
+    
+  - name: parse1
+    set_fact:
+      redundantCircuitFileName1: "doesNotExist"
+    when: redundantCircuitFileName.0 is not defined
+
+  ##Get second redundant wan doc if exists      
+  - name: parse2
+    set_fact:
+      redundantCircuitFileName2: "{{ redundantCircuitFileName.1 }}"
+    when: redundantCircuitFileName.1 is defined
+    
+  - name: parse2
+    set_fact:
+      redundantCircuitFileName2: "doesNotExist"
+    when: redundantCircuitFileName.1 is not defined  
+  
+  ##Add redundant hosts from sheet #1   
+  - name: Get redundant hosts 1
+    add_host:
+      hostname: "{{ item }}"
+      groups: "{{ redundantCircuitFileName1 }}"
+      ansible_connection: network_cli
+      ansible_user: ******
+      ansible_password: "******"
+      ansible_network_os: ios
+      ansible_become: yes
+    loop: "{{ lookup('file', 'group_vars/circuits/'+redundantCircuitFileName1+'.yml')|from_yaml|json_query('circuitDefinition[0].endPoints[*].router') }}"
+    changed_when: false    
+    ignore_errors: yes
+    when: redundantCircuitFileName1 != 'doesNotExist'
+  
+  ##Add redundant hosts from sheet #2 
+  - name: Get redundant hosts 2
+    add_host:
+      hostname: "{{ item }}"
+      groups: "{{ redundantCircuitFileName2 }}"
+      ansible_connection: network_cli
+      ansible_user: ******
+      ansible_password: "******"
+      ansible_network_os: ios
+      ansible_become: yes
+    loop: "{{ lookup('file', 'group_vars/circuits/'+redundantCircuitFileName2+'.yml')|from_yaml|json_query('circuitDefinition[0].endPoints[*].router') }}"
+    changed_when: false   
+    ignore_errors: yes
+    when: redundantCircuitFileName2 != "doesNotExist"
+ 
+##Pre checks for redundant circuits (file 1)
+
+    
+- name: Check redundant circuits 1
+  hosts: "{{ redundantCircuitFileName }}"
+  vars:
+    redundantCircuitFileName: "{{ hostvars['localhost']['redundantCircuitFileName1'] }}"
+  gather_facts: no
+  ignore_errors: yes
+  
+  tasks: 
+    - include_role:
+        name: ios
+        tasks_from: ckt_redundant_circuit_pre_checks
+  
+##Pre checks for redundant circuits (file 2)
+
+    
+- name: Check redundant circuits 2
+  hosts: "{{ redundantCircuitFileName }}"
+  vars:
+    redundantCircuitFileName: "{{ hostvars['localhost']['redundantCircuitFileName2'] }}"
+  gather_facts: no
+  
+  tasks: 
+    - include_role:
+        name: ios
+        tasks_from: ckt_redundant_circuit_pre_checks
+ 
+ 
+##Pre checks - Poison - Post checks    
+- name: Check and Poison circuit
+  hosts: "{{ ckt_name }}"
+  vars:
+    ckt_name: "******"
+  gather_facts: no
+  tasks: 
+    - include_role:
+        name: ios
+        tasks_from: ckt_pre_poison_checks
+        
+    - include_role:
+        name: ios
+        tasks_from: ckt_poison
+
+ #   - include_role: 
+ #       name: ios
+ #       tasks_from: ckt_post_poison_checks
+ 
+   
+    
