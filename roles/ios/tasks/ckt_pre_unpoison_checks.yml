@@ -1,0 +1,189 @@
+---
+
+  - name: Load circuit specific vars
+    include_vars: group_vars/circuits/{{ ckt_name }}.yml
+    delegate_to: 127.0.0.1
+    ignore_errors: false
+    run_once: true
+  
+###############################################   ALL SET COMMANDS  ###############################################
+  ##Set interface name 
+  - name: Set Interface Name Of First Device
+    set_fact:
+      currentInterfaceToTarget: "{{item}}"
+    with_items: "{{ circuitDefinition[0].endPoints.0.interface.name}}"
+    when: circuitDefinition[0].endPoints.0.router == inventory_hostname
+   
+  - name: Set Interface Name Of Second Device
+    set_fact:
+      currentInterfaceToTarget: "{{item}}"
+    with_items: "{{ circuitDefinition[0].endPoints.1.interface.name}}"
+    when: circuitDefinition[0].endPoints.1.router == inventory_hostname   
+    
+  ##Set far IP address
+  - name: Set far IP address Of First Device
+    set_fact:
+      currentFarIPAddressToTarget: "{{item}}"
+    with_items: "{{ circuitDefinition[0].endPoints.0.interface.far_ip_address}}"
+    when: circuitDefinition[0].endPoints.0.router == inventory_hostname
+   
+  - name: Set far IP address Of Second Device
+    set_fact:
+      currentFarIPAddressToTarget: "{{item}}"
+    with_items: "{{ circuitDefinition[0].endPoints.1.interface.far_ip_address}}"
+    when: circuitDefinition[0].endPoints.1.router == inventory_hostname   
+
+
+  ##Set IP route variable
+
+   
+  - name: Set IP route address Of First Device
+    set_fact:
+      currentIPRouteAddressToTarget: "{{currentIPRouteAddressToTarget | default([]) | union([item]) }}"
+    with_items: "{{ circuitDefinition[0].endPoints.0.interface.ipRouteCheck}}"
+    when: circuitDefinition[0].endPoints.0.router == inventory_hostname
+    register: test22
+   
+  - name: Set IP route address Of Second Device
+    set_fact: 
+      currentIPRouteAddressToTarget: "{{currentIPRouteAddressToTarget | default([]) | union([item]) }}"
+    with_items: "{{ circuitDefinition[0].endPoints.1.interface.ipRouteCheck}}"
+    when: circuitDefinition[0].endPoints.1.router == inventory_hostname   
+    register: test22
+
+    
+    
+    
+    
+   
+  
+  
+## Set running-config interface value
+  - name: Get Interface Running-Config
+    ios_command:
+      commands:
+       - sh run int {{currentInterfaceToTarget}}
+    register: runningInterfaceOutput
+    become: yes
+    check_mode: no
+    
+    
+ ## Set interface errors to variable and parse to list (Run 1)
+  - name: Set interface errors to variable
+    ios_command: 
+      commands: 
+      - sh int {{currentInterfaceToTarget}} | in error
+    register: interfaceErrorOutput_Run1
+    check_mode: no
+      
+  - name: Parse errors line one. Split list by comma
+    set_fact: 
+      errorsParse1_Run1: "{{ item.split(',') }}"
+    with_items: "{{ interfaceErrorOutput_Run1.stdout_lines.0.0 }}"
+    
+  - name: Parse errors line two. Split list by comma
+    set_fact: 
+      errorsParse2_Run1: "{{ item.split(',') }}"
+    with_items: "{{ interfaceErrorOutput_Run1.stdout_lines.0.1 }}"
+  
+  - name: Merge lists   
+    set_fact:
+      error_list_merged_1: "{{ errorsParse1_Run1 + errorsParse2_Run1 }}"
+      
+
+## Set IP Route Values
+  - name: Set IP Route Output Variable
+    ios_command:
+      commands: 
+      - sh ip route {{item}}
+    with_items: "{{ currentIPRouteAddressToTarget}}"
+    register: ipRouteOutput
+    check_mode: no
+    
+  - name: Parse IP route output
+    set_fact:
+      ipRouteOutputParsed: "{{ipRouteOutputParsed | default([]) | union([item.stdout_lines]) }}"
+    loop: "{{ipRouteOutput.results}}"   
+    
+
+## Set Ping Results
+  - name: Try 5 pings
+    ios_ping:
+      dest: "{{currentFarIPAddressToTarget}}"
+      count: 5
+    register: pingOutput
+    check_mode: no
+  
+  - name: If 5 pings passed, ping 1000 times
+    ios_ping:
+      dest: "{{currentFarIPAddressToTarget}}"
+      count: 1000
+    register: pingOutput
+    ignore_errors: yes
+    when: pingOutput.packet_loss == "0%"
+    check_mode: no
+
+  - name: Fail play if packet_loss does not equal 0%
+    fail:  
+      msg: "PACKET LOSS FOUND - {{ pingOutput }}"
+    when: pingOutput.packet_loss != "0%"
+     
+
+ ## Set interface errors to variable and parse to list (Run 2)
+  - name: Set interface errors to variable
+    ios_command: 
+      commands: 
+      - sh int {{currentInterfaceToTarget}} | in error
+    register: interfaceErrorOutput_Run2
+    check_mode: no
+      
+  - name: Parse errors line one. Split list by comma
+    set_fact: 
+      errorsParse1_Run2: "{{ item.split(',') }}"
+    with_items: "{{ interfaceErrorOutput_Run2.stdout_lines.0.0 }}"
+    
+  - name: Parse errors line two. Split list by comma
+    set_fact: 
+      errorsParse2_Run2: "{{ item.split(',') }}"
+    with_items: "{{ interfaceErrorOutput_Run2.stdout_lines.0.1 }}"
+  
+  - name: Merge lists   
+    set_fact:
+      error_list_merged_2: "{{ errorsParse1_Run2 + errorsParse2_Run2 }}"
+
+
+##Compare errors before and after
+  - name: Compare merged error lists
+    set_fact:
+      differencesInLists: "{{ error_list_merged_1 | difference(error_list_merged_2) | list }}"
+
+  - name: Fail playbook if errors are different before and after pings
+    fail:
+      msg: "***ERRORS ARE PRESENT: TERMINATING SCRIPT NOW***"
+    when: differencesInLists  | length > 0
+    
+###############################################   ALL SHOW COMMANDS  ###############################################
+    
+  - name: SHOW - RUNNING-CONFIG - INTERFACE (PRE UNPOISON CHECKS ON MAIN HOSTS)
+    debug: 
+      msg: "{{ runningInterfaceOutput.stdout_lines }}" 
+      
+  - name: SHOW - INTERFACE - ERRORS (PRE UNPOISON CHECKS ON MAIN HOSTS)
+    debug: 
+      msg: 
+      - "Errors before ping:" 
+      - "{{interfaceErrorOutput_Run1.stdout_lines}}" 
+      - "-------------------------------------------------"
+      - "Errors after ping:" 
+      - "{{interfaceErrorOutput_Run2.stdout_lines}}" 
+                    
+  - name: SHOW - IP - ROUTE (PRE UNPOISON CHECKS ON MAIN HOSTS)
+    debug: 
+      msg: "{{ item }}"  
+    loop: "{{ipRouteOutputParsed}}"   
+    
+  - name: SHOW - PING - RESULTS (PRE UNPOISON CHECKS ON MAIN HOSTS)
+    debug: 
+      msg: "{{ pingOutput }}"
+
+

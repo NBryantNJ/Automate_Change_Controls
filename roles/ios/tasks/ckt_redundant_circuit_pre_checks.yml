@@ -1,0 +1,65 @@
+---
+
+  - name: Load circuit specific vars
+    include_vars: group_vars/circuits/{{ redundantCircuitFileName }}.yml
+    delegate_to: 127.0.0.1
+    ignore_errors: false
+    run_once: true
+    
+
+##Set far IP address
+  - name: Set far IP address Of First Device
+    set_fact:
+      currentFarIPAddressToTarget: "{{item}}"
+    with_items: "{{ circuitDefinition[0].endPoints.0.interface.far_ip_address}}"
+    when: circuitDefinition[0].endPoints.0.router == inventory_hostname
+   
+  - name: Set far IP address Of Second Device
+    set_fact:
+      currentFarIPAddressToTarget: "{{item}}"
+    with_items: "{{ circuitDefinition[0].endPoints.1.interface.far_ip_address}}"
+    when: circuitDefinition[0].endPoints.1.router == inventory_hostname   
+
+## Set Ping Results 
+  - name: Try 5 pings
+    ios_ping:
+      dest: "{{currentFarIPAddressToTarget}}"
+      count: 5
+    register: pingOutput
+    check_mode: no
+  
+  - name: If 5 pings passed, ping 1000 times
+    ios_ping:
+      dest: "{{currentFarIPAddressToTarget}}"
+      count: 1000
+      timeout: 3
+    register: pingOutput
+    ignore_errors: yes
+    when: pingOutput.packet_loss == "0%"
+    check_mode: no
+
+
+
+
+
+###############################################   ALL SHOW COMMANDS  ###############################################
+    
+  - name: SHOW - PING - RESULTS (PRE CHECKS RUDUNDANT HOSTS)
+    debug: 
+      msg: "{{ pingOutput }}"
+      
+
+  - name: Check ping output if error (PRE CHECKS RUDUNDANT HOSTS)
+    debug: 
+      msg: "Ending the play packet loss is above 0% on the redundant circuit: {{pingOutput}}" 
+    when: pingOutput.packet_loss != '0%' 
+    
+    #If packet loss is not 0% immediately end the script
+  - fail:
+      msg: "{{pingOutput}}"
+    when: pingOutput.packet_loss != '0%' 
+    
+
+    
+    
+    

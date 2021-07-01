@@ -1,0 +1,10 @@
+---
+
+- name: Poison the circuit
+  ios_config: 
+    lines: 
+    - delay 100
+  
+  
+  
+
